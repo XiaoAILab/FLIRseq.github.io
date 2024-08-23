@@ -1,0 +1,205 @@
+#############    FLIRseq workflow    ###########
+
+##################  1. call consensus reads
+
+git clone https://github.com/rvolden/C3POa.git
+
+chmod +x setup.sh
+
+./setup.sh
+
+python3 C3POa.py -r sample.fastq -o output -s TCR_BCR_splint.fasta -c config.txt -l 400 -d 150 -n 10 --zero
+
+cat output/*/R2C2_Consensus.fasta > output/Consensus.fasta
+
+##################  2. Filter the consensus reads with low confidence
+
+grep -n ">" Consensus.fasta |grep -v "_1_" > sample_n.txt
+
+python2 extract_seq_by_id.py Consensus.fasta sample_n.txt repeat2_Consensus.fasta
+
+##################  3.reorient consensus reads
+
+python fasta_miRNA.py --file repeat2_Consensus.fasta
+
+##################  4. Align to the T- or B- cell receptor repertoire
+
+conda install -c milaboratories mixcr
+
+mixcr analyze amplicon -s hsa --starting-material rna --3-end c-primers --5-end v-primers --adapters no-adapters --contig-assembly --impute-germline-on-export Consensus_Rdir.fasta IR
+
+############  additional script and file   ##########
+
+##################  1.extract_seq_by_id.py
+
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+
+import os, csv, sys
+
+'''
+    DOC: http://cnvkit.readthedocs.io/en/stable/quickstart.html
+    Home: https://github.com/etal/cnvkit
+
+    =============================================================
+
+    Build the reference CNN file for all normal samples
+
+    @@@@ change log
+'''
+
+def main():
+    '''
+        ========================================================
+        ========================================================
+    '''
+
+    read_id = []
+
+    in_file = sys.argv[1]
+    id_file = sys.argv[2]
+    out_file = sys.argv[3]
+
+    with open(id_file, 'rb') as in_handle:
+        for line in in_handle:
+            target_id = ':'.join(line.strip().split(':')[1:])
+            read_id.append(target_id)
+    print '[INFO]: Found %s seq id from %s' % (len(read_id), id_file)
+    read_id = set(read_id)
+
+
+    flag_to_out = 0
+    with open(in_file, 'rb') as in_handle, open(out_file, 'wb') as out_handle:
+        for line in in_handle:
+            if line[0] == '>':
+                flag_to_out = 0
+                seq_id = line.strip()
+                if seq_id in read_id:
+                    print '[INFO]: Output sequence with %s' % seq_id
+                    flag_to_out = 1
+                    out_handle.write(line)
+            else:
+                if flag_to_out == 1:
+                    out_handle.write(line)
+
+
+if __name__ == '__main__':
+    main()
+
+##################  2.fasta_miRNA.py
+#!/usr/bin/python
+# programmer : zhangll
+# usage:fasta split by miRNA
+
+import sys
+import string
+import re
+import numpy as np
+import argparse
+
+def Seq_find_miRNA(file):
+    with open(file, 'r') as fin:
+        with open('Consensus_Rdir.fasta','w') as fout:
+            lines = fin.readlines()
+            for line in lines:
+                line = line.rstrip()
+                if line.startswith('>'):
+                    fout.writelines(line+'\n')
+                else:
+                    pos = line.find('CTGTAGGCACCATCAAT')
+                    pos_rev = line.find('ATTGATGGTGCCTACAG')
+                    if pos == -1 and pos_rev == -1:
+                        fout.writelines(line+'\n')
+                    elif pos != -1 :
+                        ret = []
+                        while pos != -1:
+                            ret.append(pos)
+                            pos = line.find('CTGTAGGCACCATCAAT', pos+1)
+                        if len(ret)==1:
+                            fout.writelines(line[ret[0]:]+line[:ret[0]]+'\n')
+                            #print line[ret[0]:]+line[:ret[0]]
+                        else:    
+                            ret0=ret[:-1]
+                            ret1=ret[1:]
+                            aa=np.array(ret1)-np.array(ret0)
+                            aa=aa.tolist()
+                            seq_length=max(aa)  
+                            index_pos=aa.index(seq_length)
+                            if len(line[ret[index_pos]:ret[index_pos+1]]) >= len(line[ret[-1]:]+line[:ret[0]]):
+                                fout.writelines(line[ret[index_pos]:ret[index_pos+1]]+'\n')
+                                #print line[ret[index_pos]:ret[index_pos+1]]
+                            else:
+                                fout.writelines(line[ret[-1]:]+line[:ret[0]]+'\n')
+                                #print line[ret[-1]:]+line[:ret[0]]
+                    else:
+                        ret_rev = []
+                        while pos_rev != -1:
+                            ret_rev.append(pos_rev)
+                            pos_rev = line.find('ATTGATGGTGCCTACAG', pos_rev+1)
+                        if len(ret_rev) == 1:
+                            fout.writelines(line[ret_rev[0]:]+line[:ret_rev[0]]+'\n')
+                            #print line[ret[0]:]+line[:ret[0]]
+                        else:    
+                            ret_rev0 = ret_rev[:-1]
+                            ret_rev1 = ret_rev[1:]
+                            aa = np.array(ret_rev1)-np.array(ret_rev0)
+                            aa = aa.tolist()
+                            seq_length = max(aa)  
+                            index_pos = aa.index(seq_length)
+                            if len(line[ret_rev[index_pos]:ret_rev[index_pos+1]]) >= len(line[ret_rev[-1]:]+line[:ret_rev[0]]):
+                                fout.writelines(line[ret_rev[index_pos]:ret_rev[index_pos+1]]+'\n')
+                                #print line[ret[index_pos]:ret[index_pos+1]]
+                            else:
+                                fout.writelines(line[ret_rev[-1]:]+line[:ret_rev[0]]+'\n')
+                                #print line[ret[-1]:]+line[:ret[0]]
+                     
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--file",type=str, default = None)
+    args=parser.parse_args()
+    Seq_find_miRNA(args.file)
+
+if __name__=="__main__":
+    main()
+
+
+##################  3.TCR_BCR_splint.fasta
+>TRBC1
+AGGACCTGAAAAACGTGTTCCCACCCAAGGTCGCTGTGTTTGAGCCATCAGAAGCAGAGATCTCCCACAC
+>TRBC2
+AGGACCTGAACAAGGTGTTCCCACCCGAGGTCGCTGTGTTTGAGCCATCAGAAGCAGAGATCTCCCACAC
+>IGHA1
+CATCCCCGACCAGCCCCAAGGTCTTCCCGCTGAGCCTCTGCAGCACCCAGCCAGATGGGAACGTGGTCAT
+>IGHA2
+CATCCCCGACCAGCCCCAAGGTCTTCCCGCTGAGCCTCGACAGCACCCCCCAAGATGGGAACGTGGTCGT
+>IGHG1
+CCTCCACCAAGGGCCCATCGGTCTTCCCCCTGGCACCCTCCTCCAAGAGCACCTCTGGGGGCACAGCAGC
+>IGHG2
+CCTCCACCAAGGGCCCATCGGTCTTCCCCCTGGCGCCCTGCTCCAGGAGCACCTCCGAGAGCACAGCGGC
+>IGHG3
+CTTCCACCAAGGGCCCATCGGTCTTCCCCCTGGCGCCCTGCTCCAGGAGCACCTCTGGGGGCACAGCGGC
+>IGHG4
+CTTCCACCAAGGGCCCATCGGTCTTCCCCCTGGCGCCCTGCTCCAGGAGCACCTCCGAGAGCACAGCCGC
+>IGHM
+GGAGTGCATCCGCCCCAACCCTTTTCCCCCTCGTCTCCTGTGAGAATTCCCCGTCGGATACGAGCAGCGT
+>IGHD
+CACCCACCAAGGCTCCGGATGTGTTCCCCATCATATCAGGGTGCAGACACCCAAAGGATAACAGCCCTGT
+>IGHE
+CCTCCACACAGAGCCCATCCGTCTTCCCCTTGACCCGCTGCTGCAAAAACATTCCCTCCAATGCCACCTC
+>IGKC
+GAACTGTGGCTGCACCATCTGTCTTCATCTTCCCGCCATCTGATGAGCAGTTGAAATCTGGAACTGCCTC
+>IGLC1
+GTCAGCCCAAGGCCAACCCCACTGTCACTCTGTTCCCGCCCTCCTCTGAGGAGCTCCAAGCCAACAAGGC
+>IGLC2
+GTCAGCCCAAGGCTGCCCCCTCGGTCACTCTGTTCCCGCCCTCCTCTGAGGAGCTTCAAGCCAACAAGGC
+>IGLC3
+GTCAGCCCAAGGCTGCCCCCTCGGTCACTCTGTTCCCACCCTCCTCTGAGGAGCTTCAAGCCAACAAGGC
+>IGLC4
+ACAAGGCCACACTGGTGTGTCTCATGAGTGACTTCTACCCGAGAGCCATGACAGTGGCCTGGAAGATAGA
+>IGLC5
+GTCCGCTCAAGGCCACCCCCTTGGTCACTCTGTTCCCGCCCTCCTCTGAGGAGCTCCAAGCCAACAAGGC
+>IGLC6
+GTCAGCCCAAGGCTGCCCCATCGGTCACTCTGTTCCCGCCCTCCTCTGAGGAGCTTCAAGCCAACAAGGC
+>IGLC7
+GTCAGCCCAAGGCTGCCCCCTCGGTCACTCTGTTCCCACCCTCCTCTGAGGAGCTTCAAGCCAACAAGGC
